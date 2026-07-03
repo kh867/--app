@@ -1,1055 +1,1063 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Search, ChevronLeft, Map as MapIcon, Car, AlertTriangle, 
-  Camera, ShieldCheck, CheckCircle2, Loader2, Info, 
-  Home, User, Clock, CreditCard, Navigation, X, MapPin, History,
-  Sparkles, Bot, MessageSquare, ArrowUpCircle,
-  Save, Phone, Smartphone, KeyRound, ChevronRight, Edit3
-} from 'lucide-react';
-
-// ==========================================
-// Gemini API 설정 및 유틸리티
-// ==========================================
-const apiKey = ""; // 런타임 환경에서 주입됩니다.
-
-// API 호출 재시도 함수 (Exponential Backoff)
-const fetchWithRetry = async (url, options, retries = 5) => {
-  const delays = [1000, 2000, 4000, 8000, 16000];
-  for (let i = 0; i < retries; i++) {
-      try {
-          const res = await fetch(url, options);
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-          return await res.json();
-      } catch (e) {
-          if (i === retries - 1) throw e;
-          await new Promise(r => setTimeout(r, delays[i]));
-      }
-  }
-};
-
-const getBase64 = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.readAsDataURL(file);
-  reader.onload = () => resolve(reader.result);
-  reader.onerror = error => reject(error);
-});
-
-// ==========================================
-// [가상 데이터베이스]
-// ==========================================
-const PARKING_DB = [
-  { id: 1, name: '수원시청 부설주차장', address: '경기 수원시 팔달구 효원로 241', total: 300, available: 42, fee: '최초 30분 무료, 이후 10분당 500원', hours: '평일 09:00~18:00 (주말 무료)', distance: '1.2km', lat: 37.2635, lng: 127.0286 },
-  { id: 2, name: '수원역 환승공영주차장', address: '경기 수원시 권선구 세화로 136', total: 500, available: 5, fee: '10분당 400원, 일 최대 4,000원', hours: '24시간 연중무휴', distance: '3.5km', lat: 37.2658, lng: 126.9999 },
-  { id: 3, name: '강남역 1번출구 공영주차장', address: '서울 강남구 테헤란로 101', total: 120, available: 18, fee: '5분당 400원', hours: '24시간 연중무휴', distance: '31km', lat: 37.4979, lng: 127.0276 },
-  { id: 4, name: '광교중앙역 환승센터 주차장', address: '경기 수원시 영통구 광교중앙로 245', total: 250, available: 120, fee: '10분당 300원', hours: '05:00 ~ 01:00', distance: '4.1km', lat: 37.2886, lng: 127.0515 },
-  { id: 5, name: '행궁동 공영주차장', address: '경기 수원시 팔달구 정조로 825', total: 80, available: 0, fee: '최초 30분 400원, 이후 10분당 200원', hours: '10:00 ~ 20:00', distance: '2.8km', lat: 37.2838, lng: 127.0157 },
-  { id: 6, name: '코엑스 동문 지하주차장', address: '서울 강남구 영동대로 513', total: 1500, available: 430, fee: '15분당 1,500원', hours: '24시간 연중무휴', distance: '34km', lat: 37.5116, lng: 127.0591 },
-];
-
-export default function App() {
-  const [activeTab, setActiveTab] = useState('home');
-  const [subView, setSubView] = useState('main'); 
-
-  // --- [신규] 전역 알림(Toast) 상태 ---
-  const [toastMsg, setToastMsg] = useState(null);
-  const showToast = (msg) => {
-    setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3000);
-  };
-
-  // --- [신규] 사용자 프로필 상태 ---
-  const [userProfile, setUserProfile] = useState({
-    name: '김주차',
-    phone: '010-1234-5678',
-    carNumber: '12가3456'
-  });
-
-  // --- [신규] 임시 프로필 수정 상태 ---
-  const [editProfile, setEditProfile] = useState({...userProfile});
-
-  // --- [신규] 신고 내역 상태 ---
-  const [reportHistory, setReportHistory] = useState([
-    { id: '20260701-A01', date: '2026-07-01 14:30', location: '수원시청 앞', plateNumber: '99하9999', status: '처리완료' }
-  ]);
-
-  // --- [신규] 본인 인증 진행 상태 ---
-  const [authStep, setAuthStep] = useState('select'); // select -> phone -> code -> verifying
-  const [authCode, setAuthCode] = useState(''); // 6자리 인증번호
-  const [timeLeft, setTimeLeft] = useState(180); // 인증번호 타이머 3분 (180초)
-
-  // 타이머 작동 로직
-  useEffect(() => {
-    if (authStep === 'code' && timeLeft > 0) {
-      const timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
-      return () => clearInterval(timer);
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>주차해결사</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    /* 스크롤바 숨기기 및 기본 스타일 */
+    .scrollbar-hide::-webkit-scrollbar { display: none; }
+    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    
+    /* 페이드 인 애니메이션 */
+    .fade-in { animation: fadeIn 0.3s ease-in-out; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
     }
-  }, [authStep, timeLeft]);
-
-  // 초 단위를 분:초 로 변환
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `0${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  const navigateTo = (tab, view = 'main') => {
-    setActiveTab(tab);
-    setSubView(view);
-  };
-
-  // ==========================================
-  // [1] 검색 및 AI 주차 비서 상태
-  // ==========================================
-  const [searchQuery, setSearchQuery] = useState('');
-  const [recentSearches, setRecentSearches] = useState(['수원시청', '강남역', '광교']);
-  const [selectedLot, setSelectedLot] = useState(null);
-  const [selectedFloor, setSelectedFloor] = useState('B1');
-  const [parkingSpots, setParkingSpots] = useState([]);
-  
-  // AI 채팅 상태
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [aiChatInput, setAiChatInput] = useState('');
-  const [aiChatResponse, setAiChatResponse] = useState(null);
-  const [isAiThinking, setIsAiThinking] = useState(false);
-
-  const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    return PARKING_DB.filter(lot => 
-      lot.name.includes(searchQuery) || lot.address.includes(searchQuery)
-    );
-  }, [searchQuery]);
-
-  const handleSelectLot = (lot) => {
-    setSelectedLot(lot);
-    if (!recentSearches.includes(lot.name)) {
-      setRecentSearches([lot.name, ...recentSearches].slice(0, 5));
+    
+    .zoom-in { animation: zoomIn 0.3s ease-out; }
+    @keyframes zoomIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
     }
-    setSubView('detail');
-  };
 
-  useEffect(() => {
-    if (subView === 'grid' && selectedLot) {
-      const availRatio = selectedLot.available / selectedLot.total;
-      const spots = Array.from({ length: 20 }, (_, i) => ({
-        id: i + 1,
-        isAvailable: Math.random() < availRatio 
-      }));
-      setParkingSpots(spots);
+    .toast-enter { animation: toastEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    @keyframes toastEnter {
+      from { opacity: 0; transform: translate(-50%, -20px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
     }
-  }, [subView, selectedFloor, selectedLot]);
+  </style>
+</head>
+<body class="bg-slate-900 min-h-screen flex items-center justify-center font-sans select-none">
 
-  // ✨ 기능 1: AI 주차장 추천 (Gemini Text API)
-  const handleAskAiParking = async () => {
-    if (!aiChatInput.trim()) return;
-    setIsAiThinking(true);
-    setAiChatResponse(null);
+  <!-- 모바일 앱 컨테이너 -->
+  <div class="w-full h-[100dvh] sm:h-[850px] max-w-[400px] bg-white sm:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col">
+    <!-- 데스크탑 뷰 노치 시뮬레이션 -->
+    <div class="hidden sm:block absolute top-0 left-1/2 transform -translate-x-1/2 w-40 h-7 bg-slate-900 rounded-b-3xl z-50"></div>
 
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-      const dbContext = JSON.stringify(PARKING_DB.map(p => ({
-        이름: p.name, 남은자리: p.available, 요금: p.fee, 운영시간: p.hours, 거리: p.distance
-      })));
-      
-      const prompt = `사용자의 질문: "${aiChatInput}"\n\n주차장 데이터: ${dbContext}\n\n위 데이터를 바탕으로 사용자의 조건(가격, 거리, 남은 자리 등)에 가장 잘 맞는 주차장을 추천해줘. 답변은 2-3문장으로 핵심만 친절하게 말해줘.`;
-
-      const payload = {
-        contents: [{ parts: [{ text: prompt }] }],
-        systemInstruction: { parts: [{ text: "당신은 사용자에게 딱 맞는 주차장을 찾아주는 훌륭한 주차 비서 '주차해결사 AI'입니다." }] }
-      };
-
-      const result = await fetchWithRetry(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text || '죄송합니다. 추천을 불러오지 못했습니다.';
-      setAiChatResponse(responseText);
-    } catch (error) {
-      setAiChatResponse("AI 통신 중 오류가 발생했습니다. 다시 시도해주세요.");
-    } finally {
-      setIsAiThinking(false);
-    }
-  };
-
-
-  // ==========================================
-  // [2] 불법 주차 신고 & AI 비전 상태
-  // ==========================================
-  const [reportData, setReportData] = useState({ 
-    location: '', 
-    plateNumber: '', 
-    description: '',
-    photoUrl: null,
-    photoFile: null 
-  });
-  const [isAiAnalyzingImage, setIsAiAnalyzingImage] = useState(false);
-  
-  // 딥페이크 판별 시뮬레이션 상태
-  const [isAiChecking, setIsAiChecking] = useState(false);
-
-  // ✨ 기능 2: AI 사진 분석 자동 완성 (Gemini Vision API)
-  const handleAiAutoFill = async () => {
-    if (!reportData.photoFile) return;
-    setIsAiAnalyzingImage(true);
-
-    try {
-      const base64String = await getBase64(reportData.photoFile);
-      const base64Data = base64String.split(',')[1];
-      const mimeType = reportData.photoFile.type;
-
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-      const prompt = "이 사진은 불법 주차 신고를 위한 차량 사진입니다. 사진을 분석해서 두 가지를 추출해주세요: 1) 차량 번호판이 보인다면 번호를 추출하세요. 안 보이면 '미상'이라고 적으세요. 2) 불법 주차 정황(예: 횡단보도 위, 소화전 옆, 이중주차, 갓길 등) 및 차량 색상을 1문장으로 묘사하세요. 응답은 반드시 아래 JSON 형식으로만 반환하세요: {\"plateNumber\": \"차량번호\", \"description\": \"정황설명\"}";
-
-      const payload = {
-        contents: [{
-          role: "user",
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType, data: base64Data } }
-          ]
-        }],
-        generationConfig: { 
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              plateNumber: { type: "STRING" },
-              description: { type: "STRING" }
-            }
-          }
-        }
-      };
-
-      const result = await fetchWithRetry(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) {
-        const parsed = JSON.parse(text);
-        setReportData(prev => ({
-          ...prev,
-          plateNumber: parsed.plateNumber !== '미상' ? parsed.plateNumber : prev.plateNumber,
-          description: parsed.description || prev.description
-        }));
-      }
-    } catch (error) {
-      console.error("Vision API Error:", error);
-      alert("AI 분석에 실패했습니다. 직접 입력해주세요.");
-    } finally {
-      setIsAiAnalyzingImage(false);
-    }
-  };
-
-  const startAiDeepfakeVerification = () => {
-    setSubView('report_ai');
-    setIsAiChecking(true);
-    setTimeout(() => {
-      setIsAiChecking(false);
-      setAuthStep('select'); // 인증 단계 초기화
-      setTimeout(() => setSubView('report_auth'), 1500);
-    }, 2000);
-  };
-
-  // ==========================================
-  // 렌더링 함수들
-  // ==========================================
-
-  // [홈 화면]
-  const renderHome = () => (
-    <div className="flex flex-col h-full bg-slate-50 p-6 pt-12 overflow-y-auto pb-24">
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl font-bold text-slate-800">주차해결사</h1>
-          <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold shadow-sm">
-            {userProfile.name.charAt(0)}
-          </div>
-        </div>
-        <p className="text-slate-500 text-sm">현재 위치: 경기도 수원시</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 mb-8">
-        <button 
-          onClick={() => navigateTo('search', 'main')}
-          className="flex flex-col items-start p-5 bg-blue-600 rounded-2xl shadow-md text-white active:scale-95 transition-transform"
-        >
-          <Search size={28} className="mb-3 opacity-90" />
-          <span className="text-lg font-bold mb-1">주차장 찾기</span>
-          <span className="text-xs opacity-75">실시간 빈자리 확인</span>
-        </button>
-
-        <button 
-          onClick={() => {
-            setReportData({ location: '', plateNumber: '', description: '', photoUrl: null, photoFile: null });
-            navigateTo('report', 'main');
-          }}
-          className="flex flex-col items-start p-5 bg-white border border-slate-100 rounded-2xl shadow-sm text-slate-800 active:scale-95 transition-transform"
-        >
-          <AlertTriangle size={28} className="mb-3 text-red-500" />
-          <span className="text-lg font-bold mb-1">불법주차 신고</span>
-          <span className="text-xs text-slate-400">간편 AI 검증 접수</span>
-        </button>
-      </div>
-
-      <div className="mb-4">
-        <h3 className="font-bold text-slate-800 mb-3 flex items-center">
-          <MapPin size={18} className="mr-1 text-blue-500" /> 내 주변 공영 주차장
-        </h3>
-        <div className="space-y-3">
-          {PARKING_DB.slice(0, 2).map(lot => (
-            <div key={lot.id} onClick={() => { handleSelectLot(lot); navigateTo('search', 'detail'); }} 
-                 className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center cursor-pointer active:bg-slate-50">
-              <div>
-                <h4 className="font-semibold text-slate-800">{lot.name}</h4>
-                <p className="text-xs text-slate-500 mt-1">{lot.distance} · {lot.fee.split(',')[0]}</p>
-              </div>
-              <div className="text-right">
-                <span className={`text-sm font-bold ${lot.available > 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {lot.available > 0 ? `${lot.available}자리` : '만차'}
-                </span>
-                <p className="text-xs text-slate-400">/ {lot.total}</p>
-              </div>
-            </div>
-          ))}
-        </div>
+    <!-- 토스트 알림 영역 -->
+    <div id="toast-container" class="absolute top-12 left-1/2 transform -translate-x-1/2 z-50 w-[90%] max-w-xs hidden">
+      <div class="bg-slate-800/95 backdrop-blur-sm text-white text-sm font-medium px-4 py-3 rounded-xl shadow-xl flex items-center">
+        <i data-lucide="check-circle-2" class="text-green-400 mr-2 shrink-0 w-5 h-5"></i>
+        <span id="toast-message"></span>
       </div>
     </div>
-  );
 
-  // [검색 메인 화면 + AI 주차 비서]
-  const renderSearchMain = () => (
-    <div className="flex flex-col h-full bg-white relative pb-20">
-      <div className="px-4 py-4 border-b z-10 sticky top-0 bg-white">
-        <div className="flex items-center mb-3">
-          <button onClick={() => navigateTo('home')} className="p-2 -ml-2 text-slate-600">
-            <ChevronLeft size={24} />
+    <!-- 메인 화면 렌더링 영역 (모든 뷰를 미리 만들고 hidden 클래스로 토글) -->
+    <div id="app-content" class="flex-1 overflow-hidden relative">
+      
+      <!-- ==================== [HOME 탭] ==================== -->
+      <div id="view-home" class="app-view h-full flex flex-col bg-slate-50 p-6 pt-12 overflow-y-auto pb-24 fade-in">
+        <div class="mb-8">
+          <div class="flex items-center justify-between mb-2">
+            <h1 class="text-2xl font-bold text-slate-800">주차해결사</h1>
+            <div id="home-user-avatar" class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold shadow-sm">김</div>
+          </div>
+          <p class="text-slate-500 text-sm">현재 위치: 경기도 수원시</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 mb-8">
+          <button onclick="navigateTo('search')" class="flex flex-col items-start p-5 bg-blue-600 rounded-2xl shadow-md text-white active:scale-95 transition-transform text-left">
+            <i data-lucide="search" class="w-7 h-7 mb-3 opacity-90"></i>
+            <span class="text-lg font-bold mb-1">주차장 찾기</span>
+            <span class="text-xs opacity-75">실시간 빈자리 확인</span>
           </button>
-          <h2 className="text-lg font-semibold ml-2 text-slate-800">주차장 찾기</h2>
+          <button onclick="resetReportData(); navigateTo('report')" class="flex flex-col items-start p-5 bg-white border border-slate-100 rounded-2xl shadow-sm text-slate-800 active:scale-95 transition-transform text-left">
+            <i data-lucide="alert-triangle" class="w-7 h-7 mb-3 text-red-500"></i>
+            <span class="text-lg font-bold mb-1">불법주차 신고</span>
+            <span class="text-xs text-slate-400">간편 AI 검증 접수</span>
+          </button>
         </div>
-        <div className="relative mb-3">
-          <input 
-            type="text" 
-            placeholder="주차장 이름, 지역, 주소 검색" 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-100 rounded-xl pl-10 pr-10 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-          />
-          <Search className="absolute left-3 top-3.5 text-slate-400" size={20} />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="absolute right-3 top-3.5 text-slate-400 p-0.5 bg-slate-200 rounded-full">
-              <X size={14} />
-            </button>
-          )}
+        <div class="mb-4">
+          <h3 class="font-bold text-slate-800 mb-3 flex items-center"><i data-lucide="map-pin" class="w-[18px] h-[18px] mr-1 text-blue-500"></i> 내 주변 공영 주차장</h3>
+          <div id="home-nearby-list" class="space-y-3"></div>
         </div>
-        
-        {/* ✨ AI 주차 비서 토글 버튼 */}
-        <button 
-          onClick={() => setIsAiChatOpen(!isAiChatOpen)}
-          className={`w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center transition-colors ${
-            isAiChatOpen ? 'bg-indigo-100 text-indigo-700' : 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-sm'
-          }`}
-        >
-          <Sparkles size={16} className="mr-1.5" /> 
-          {isAiChatOpen ? 'AI 비서 닫기' : '✨ AI 주차 비서에게 맞춤 추천 받기'}
-        </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {/* ✨ AI 비서 채팅 UI */}
-        {isAiChatOpen && (
-          <div className="bg-indigo-50 border-b border-indigo-100 p-4">
-            <div className="flex items-start mb-4">
-              <div className="w-8 h-8 bg-indigo-200 text-indigo-700 rounded-full flex items-center justify-center shrink-0 mr-3">
-                <Bot size={18} />
+      <!-- ==================== [SEARCH 탭] ==================== -->
+      <!-- 1. 검색 메인 -->
+      <div id="view-search-main" class="app-view hidden h-full flex flex-col bg-white relative pb-20 fade-in">
+        <div class="px-4 py-4 border-b z-10 sticky top-0 bg-white">
+          <div class="flex items-center mb-3">
+            <button onclick="navigateTo('home')" class="p-2 -ml-2 text-slate-600"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+            <h2 class="text-lg font-semibold ml-2 text-slate-800">주차장 찾기</h2>
+          </div>
+          <div class="relative mb-3">
+            <input type="text" id="search-input" placeholder="주차장 이름, 지역, 주소 검색" class="w-full bg-slate-100 rounded-xl pl-10 pr-10 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"/>
+            <i data-lucide="search" class="absolute left-3 top-3.5 text-slate-400 w-5 h-5"></i>
+            <button id="search-clear-btn" class="hidden absolute right-3 top-3.5 text-slate-400 p-0.5 bg-slate-200 rounded-full"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+          </div>
+          <!-- AI 주차 비서 토글 버튼 -->
+          <button id="ai-chat-toggle-btn" class="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center transition-colors bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-sm">
+            <i data-lucide="sparkles" class="w-4 h-4 mr-1.5"></i> <span>✨ AI 주차 비서에게 맞춤 추천 받기</span>
+          </button>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+          <!-- AI 비서 채팅 UI -->
+          <div id="ai-chat-container" class="hidden bg-indigo-50 border-b border-indigo-100 p-4">
+            <div class="flex items-start mb-4">
+              <div class="w-8 h-8 bg-indigo-200 text-indigo-700 rounded-full flex items-center justify-center shrink-0 mr-3"><i data-lucide="bot" class="w-[18px] h-[18px]"></i></div>
+              <div class="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm text-sm text-slate-700">어떤 조건의 주차장을 찾고 계신가요?<br/>(예: "강남역 근처에 지금 자리 있는 주차장 알려줘")</div>
+            </div>
+            <div id="ai-chat-response" class="hidden flex items-start mb-4">
+              <div class="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 text-white rounded-full flex items-center justify-center shrink-0 mr-3"><i data-lucide="sparkles" class="w-4 h-4"></i></div>
+              <div id="ai-chat-response-text" class="bg-indigo-600 p-3 rounded-2xl rounded-tl-none shadow-sm text-sm text-white leading-relaxed"></div>
+            </div>
+            <div class="flex items-center space-x-2">
+              <input type="text" id="ai-chat-input" placeholder="질문을 입력하세요..." class="flex-1 text-sm bg-white border border-indigo-200 rounded-full px-4 py-2.5 focus:outline-none focus:border-indigo-400" />
+              <button id="ai-chat-send-btn" class="w-10 h-10 bg-indigo-600 text-white rounded-full flex items-center justify-center shrink-0 disabled:bg-indigo-300 transition-colors">
+                <i data-lucide="arrow-up-circle" class="w-[22px] h-[22px]"></i>
+              </button>
+            </div>
+          </div>
+          <!-- 검색 결과 / 최근 검색 영역 -->
+          <div id="search-content-area" class="p-4"></div>
+        </div>
+      </div>
+
+      <!-- 2. 주차장 상세 -->
+      <div id="view-search-detail" class="app-view hidden h-full flex flex-col bg-slate-50 relative pb-20 fade-in">
+        <div class="px-4 py-4 bg-white border-b flex items-center sticky top-0 z-10">
+          <button onclick="navigateTo('search', 'main')" class="p-2 -ml-2 text-slate-600"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+          <h2 id="detail-title" class="text-lg font-semibold ml-2 text-slate-800 truncate">주차장 이름</h2>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+          <div class="h-48 bg-slate-200 relative overflow-hidden flex items-center justify-center">
+             <div class="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/az-subtle.png')]"></div>
+             <div class="z-10 flex flex-col items-center text-slate-600">
+               <i data-lucide="map-pin" class="w-9 h-9 text-red-500 mb-2 drop-shadow-md"></i>
+               <span class="text-xs font-semibold bg-white px-2 py-1 rounded shadow-sm">지도 뷰</span>
+             </div>
+          </div>
+          <div class="p-5">
+            <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-4">
+              <h3 id="detail-name" class="text-xl font-bold text-slate-800 mb-1">이름</h3>
+              <p id="detail-address" class="text-sm text-slate-500 mb-4">주소</p>
+              <div class="flex items-center justify-between p-4 bg-slate-50 rounded-xl mb-4">
+                <div class="text-center flex-1 border-r border-slate-200">
+                  <p class="text-xs text-slate-500 mb-1">총 주차면</p>
+                  <p id="detail-total" class="font-semibold text-slate-700">0대</p>
+                </div>
+                <div class="text-center flex-1">
+                  <p class="text-xs text-slate-500 mb-1">현재 빈자리</p>
+                  <p id="detail-available" class="font-bold text-lg text-green-600">0대</p>
+                </div>
               </div>
-              <div className="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm text-sm text-slate-700">
-                어떤 조건의 주차장을 찾고 계신가요?<br/>(예: "강남역 근처에 지금 자리 있는 주차장 알려줘")
+              <div class="space-y-3 text-sm">
+                <div class="flex items-start"><i data-lucide="clock" class="w-4 h-4 text-slate-400 mr-2 mt-0.5 shrink-0"></i> <span id="detail-hours" class="text-slate-700"></span></div>
+                <div class="flex items-start"><i data-lucide="credit-card" class="w-4 h-4 text-slate-400 mr-2 mt-0.5 shrink-0"></i> <span id="detail-fee" class="text-slate-700"></span></div>
               </div>
+            </div>
+            <button id="detail-grid-btn" onclick="navigateTo('search', 'grid')" class="w-full bg-slate-800 text-white font-semibold py-4 rounded-xl shadow-md disabled:bg-slate-300 transition-colors flex justify-center items-center">
+              층별 실시간 현황 보기
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 실시간 그리드 뷰 -->
+      <div id="view-search-grid" class="app-view hidden h-full flex flex-col bg-slate-50 relative fade-in">
+        <div class="px-4 py-4 bg-white shadow-sm flex items-center z-10 sticky top-0">
+          <button onclick="navigateTo('search', 'detail')" class="p-2 -ml-2 text-slate-600"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+          <div class="ml-2">
+            <h2 id="grid-title" class="text-sm font-semibold text-slate-800">주차장 이름</h2>
+            <p class="text-xs text-slate-500">실시간 구역 확인</p>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 pb-20">
+          <div id="grid-floors" class="flex space-x-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+            <!-- 층 버튼 동적 생성 -->
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <div class="flex justify-between items-center mb-6">
+              <h3 id="grid-current-floor" class="font-semibold text-slate-800">B1 주차 현황</h3>
+              <div class="flex space-x-3 text-xs">
+                <div class="flex items-center"><div class="w-3 h-3 bg-green-500 rounded-sm mr-1"></div>빈자리</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-red-500 rounded-sm mr-1"></div>주차됨</div>
+              </div>
+            </div>
+            <div class="relative bg-slate-100 p-4 rounded-xl">
+              <div class="absolute left-1/2 top-0 bottom-0 w-8 -ml-4 bg-slate-300 opacity-20 border-x border-dashed border-slate-400"></div>
+              <div id="grid-spots-container" class="grid grid-cols-2 gap-x-12 gap-y-3 relative z-10">
+                <!-- 스팟 동적 생성 -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== [REPORT 탭] ==================== -->
+      <!-- 1. 신고 메인 폼 -->
+      <div id="view-report-main" class="app-view hidden h-full flex flex-col bg-white relative pb-20 fade-in">
+        <div class="px-4 py-4 border-b flex items-center shrink-0 bg-white sticky top-0 z-10">
+          <button onclick="navigateTo('home')" class="p-2 text-slate-600 absolute left-2"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+          <h2 class="text-lg font-semibold text-slate-800 flex-1 text-center">불법 주차 신고</h2>
+        </div>
+        <div class="flex-1 overflow-y-auto p-6 space-y-6">
+          <!-- 사진 업로드 -->
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-2">증거 사진 첨부 (필수)</label>
+            <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-300 border-dashed rounded-lg bg-slate-50 relative overflow-hidden h-32">
+              <div id="report-photo-preview" class="absolute inset-0 w-full h-full hidden">
+                <img id="report-photo-img" src="" alt="Uploaded" class="w-full h-full object-cover" />
+                <div class="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
+                   <p class="text-white text-sm font-medium cursor-pointer">사진 변경하기</p>
+                </div>
+              </div>
+              <div id="report-photo-placeholder" class="space-y-1 text-center flex flex-col items-center justify-center">
+                <i data-lucide="camera" class="w-10 h-10 text-slate-400"></i>
+                <div class="flex text-sm text-slate-600 justify-center mt-2">
+                  <span class="font-medium text-red-600 hover:text-red-500">사진 업로드</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">위반 현장이 명확히 보이는 사진</p>
+              </div>
+              <input type="file" id="report-file-input" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
             </div>
             
-            {aiChatResponse && (
-              <div className="flex items-start mb-4">
-                <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 text-white rounded-full flex items-center justify-center shrink-0 mr-3">
-                  <Sparkles size={16} />
-                </div>
-                <div className="bg-indigo-600 p-3 rounded-2xl rounded-tl-none shadow-sm text-sm text-white leading-relaxed">
-                  {aiChatResponse}
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center space-x-2">
-              <input 
-                type="text" 
-                value={aiChatInput}
-                onChange={e => setAiChatInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleAskAiParking()}
-                placeholder="질문을 입력하세요..."
-                className="flex-1 text-sm bg-white border border-indigo-200 rounded-full px-4 py-2.5 focus:outline-none focus:border-indigo-400"
-              />
-              <button 
-                onClick={handleAskAiParking}
-                disabled={isAiThinking || !aiChatInput.trim()}
-                className="w-10 h-10 bg-indigo-600 text-white rounded-full flex items-center justify-center shrink-0 disabled:bg-indigo-300 transition-colors"
-              >
-                {isAiThinking ? <Loader2 size={18} className="animate-spin" /> : <ArrowUpCircle size={22} />}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {!searchQuery && !isAiChatOpen ? (
-          <div className="p-4">
-            <h3 className="text-xs font-semibold text-slate-400 mb-3 flex items-center">
-              <History size={14} className="mr-1" /> 최근 검색
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {recentSearches.map((term, idx) => (
-                <button key={idx} onClick={() => setSearchQuery(term)} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-sm text-slate-600 hover:bg-slate-100">
-                  {term}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : searchResults.length > 0 ? (
-          <div className="divide-y divide-slate-100">
-            {searchResults.map(lot => (
-              <div key={lot.id} onClick={() => handleSelectLot(lot)} className="p-4 hover:bg-slate-50 cursor-pointer transition-colors">
-                <h4 className="font-semibold text-slate-800 mb-1">{lot.name}</h4>
-                <p className="text-xs text-slate-500 mb-2">{lot.address}</p>
-                <div className="flex gap-2">
-                  <span className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded">거리 {lot.distance}</span>
-                  <span className={`text-xs px-2 py-1 rounded font-medium ${lot.available > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {lot.available > 0 ? `${lot.available}대 가능` : '만차'}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : !isAiChatOpen ? (
-          <div className="flex flex-col items-center justify-center pt-20 text-slate-400">
-            <Search size={40} className="mb-3 opacity-20" />
-            <p className="text-sm">검색 결과가 없습니다.</p>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-
-  // [검색 > 주차장 상세 화면]
-  const renderSearchDetail = () => (
-    <div className="flex flex-col h-full bg-slate-50 relative pb-20">
-      <div className="px-4 py-4 bg-white border-b flex items-center sticky top-0 z-10">
-        <button onClick={() => setSubView('main')} className="p-2 -ml-2 text-slate-600">
-          <ChevronLeft size={24} />
-        </button>
-        <h2 className="text-lg font-semibold ml-2 text-slate-800 truncate">{selectedLot?.name}</h2>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        <div className="h-48 bg-slate-200 relative overflow-hidden flex items-center justify-center">
-           <div className="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/az-subtle.png')]"></div>
-           <div className="z-10 flex flex-col items-center text-slate-600">
-             <MapPin size={36} className="text-red-500 mb-2 drop-shadow-md" />
-             <span className="text-xs font-semibold bg-white px-2 py-1 rounded shadow-sm">지도 뷰</span>
-           </div>
-        </div>
-
-        <div className="p-5">
-          <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-4">
-            <h3 className="text-xl font-bold text-slate-800 mb-1">{selectedLot?.name}</h3>
-            <p className="text-sm text-slate-500 mb-4">{selectedLot?.address}</p>
-
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl mb-4">
-              <div className="text-center flex-1 border-r border-slate-200">
-                <p className="text-xs text-slate-500 mb-1">총 주차면</p>
-                <p className="font-semibold text-slate-700">{selectedLot?.total}대</p>
-              </div>
-              <div className="text-center flex-1">
-                <p className="text-xs text-slate-500 mb-1">현재 빈자리</p>
-                <p className={`font-bold text-lg ${selectedLot?.available > 0 ? 'text-green-600' : 'text-red-500'}`}>
-                  {selectedLot?.available}대
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3 text-sm">
-              <div className="flex items-start">
-                <Clock size={16} className="text-slate-400 mr-2 mt-0.5 shrink-0" />
-                <span className="text-slate-700">{selectedLot?.hours}</span>
-              </div>
-              <div className="flex items-start">
-                <CreditCard size={16} className="text-slate-400 mr-2 mt-0.5 shrink-0" />
-                <span className="text-slate-700">{selectedLot?.fee}</span>
-              </div>
-            </div>
-          </div>
-
-          <button 
-            onClick={() => setSubView('grid')}
-            disabled={selectedLot?.available === 0}
-            className="w-full bg-slate-800 text-white font-semibold py-4 rounded-xl shadow-md disabled:bg-slate-300 transition-colors flex justify-center items-center"
-          >
-            {selectedLot?.available === 0 ? '현재 만차입니다' : '층별 실시간 현황 보기'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  // [검색 > 주차장 상세 > 실시간 그리드 뷰]
-  const renderSearchGrid = () => (
-    <div className="flex flex-col h-full bg-slate-50 relative">
-      <div className="px-4 py-4 bg-white shadow-sm flex items-center z-10 sticky top-0">
-        <button onClick={() => setSubView('detail')} className="p-2 -ml-2 text-slate-600">
-          <ChevronLeft size={24} />
-        </button>
-        <div className="ml-2">
-          <h2 className="text-sm font-semibold text-slate-800">{selectedLot?.name}</h2>
-          <p className="text-xs text-slate-500">실시간 구역 확인</p>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 pb-20">
-        <div className="flex space-x-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
-          {['1F', 'B1', 'B2', 'B3'].map(floor => (
-            <button
-              key={floor}
-              onClick={() => setSelectedFloor(floor)}
-              className={`px-5 py-2 rounded-full font-medium text-sm transition-colors whitespace-nowrap
-                ${selectedFloor === floor ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}
-            >
-              {floor}층
+            <button id="btn-ai-analyze" class="hidden w-full mt-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-3 rounded-lg text-sm font-bold flex items-center justify-center transition-colors disabled:opacity-70">
+              <i data-lucide="sparkles" class="w-4 h-4 mr-2"></i> ✨ AI 사진 분석 및 자동 입력
             </button>
-          ))}
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="font-semibold text-slate-800">{selectedFloor} 주차 현황</h3>
-            <div className="flex space-x-3 text-xs">
-              <div className="flex items-center"><div className="w-3 h-3 bg-green-500 rounded-sm mr-1"></div>빈자리</div>
-              <div className="flex items-center"><div className="w-3 h-3 bg-red-500 rounded-sm mr-1"></div>주차됨</div>
-            </div>
           </div>
 
-          <div className="relative bg-slate-100 p-4 rounded-xl">
-            <div className="absolute left-1/2 top-0 bottom-0 w-8 -ml-4 bg-slate-300 opacity-20 border-x border-dashed border-slate-400"></div>
-            <div className="grid grid-cols-2 gap-x-12 gap-y-3 relative z-10">
-              {parkingSpots.map((spot, index) => (
-                <div 
-                  key={spot.id}
-                  className={`
-                    h-12 rounded flex items-center justify-center font-bold text-xs text-white shadow-inner transition-all
-                    ${spot.isAvailable ? 'bg-green-500 ring-2 ring-green-300 ring-offset-1' : 'bg-red-500 opacity-90'}
-                    ${index % 2 === 0 ? 'rounded-r-none border-r-4 border-slate-300' : 'rounded-l-none border-l-4 border-slate-300'}
-                  `}
-                >
-                  {spot.isAvailable ? 'P' : <Car size={16} className="opacity-90" />}
-                </div>
-              ))}
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-2">신고 위치</label>
+            <div class="relative">
+               <i data-lucide="map-pin" class="absolute left-3 top-3.5 text-slate-400 w-[18px] h-[18px]"></i>
+               <input type="text" id="report-location" placeholder="상세 위치 (예: 강남역 4번 출구 앞)" class="w-full bg-slate-50 border border-slate-200 rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500" />
             </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  // [신고 폼 메인 화면]
-  const renderReportMain = () => (
-    <div className="flex flex-col h-full bg-white relative pb-20">
-      <div className="px-4 py-4 border-b flex items-center shrink-0 bg-white sticky top-0 z-10">
-        <button onClick={() => navigateTo('home')} className="p-2 -ml-2 text-slate-600 absolute">
-          <ChevronLeft size={24} />
-        </button>
-        <h2 className="text-lg font-semibold text-slate-800 flex-1 text-center">불법 주차 신고</h2>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* 사진 업로드 영역 */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">증거 사진 첨부 (필수)</label>
-          <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-300 border-dashed rounded-lg bg-slate-50 relative overflow-hidden">
-            {reportData.photoUrl ? (
-              <div className="absolute inset-0 w-full h-full">
-                <img src={reportData.photoUrl} alt="Uploaded" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                   <p className="text-white text-sm font-medium cursor-pointer">사진 변경하기</p>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-1 text-center">
-                <Camera className="mx-auto h-12 w-12 text-slate-400" />
-                <div className="flex text-sm text-slate-600 justify-center mt-2">
-                  <span className="font-medium text-red-600 hover:text-red-500">사진 업로드</span>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">위반 현장이 명확히 보이는 사진</p>
-              </div>
-            )}
-            <input 
-              type="file" accept="image/*"
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  const file = e.target.files[0];
-                  setReportData({ 
-                    ...reportData, 
-                    photoUrl: URL.createObjectURL(file),
-                    photoFile: file
-                  });
-                }
-              }}
-            />
-          </div>
-          
-          {/* ✨ AI 사진 자동 분석 버튼 */}
-          {reportData.photoUrl && (
-            <button 
-              onClick={handleAiAutoFill}
-              disabled={isAiAnalyzingImage}
-              className="w-full mt-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-3 rounded-lg text-sm font-bold flex items-center justify-center transition-colors disabled:opacity-70"
-            >
-              {isAiAnalyzingImage ? (
-                <><Loader2 size={16} className="mr-2 animate-spin" /> 사진 분석 중...</>
-              ) : (
-                <><Sparkles size={16} className="mr-2" /> ✨ AI 사진 분석 및 자동 입력</>
-              )}
-            </button>
-          )}
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">신고 위치</label>
-          <div className="relative">
-             <MapPin className="absolute left-3 top-3.5 text-slate-400" size={18} />
-             <input 
-               type="text" 
-               placeholder="상세 위치 (예: 강남역 4번 출구 앞)" 
-               value={reportData.location}
-               onChange={(e) => setReportData({...reportData, location: e.target.value})}
-               className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
-             />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">차량 번호</label>
-          <input 
-            type="text" 
-            placeholder="예: 12가3456" 
-            value={reportData.plateNumber}
-            onChange={(e) => setReportData({...reportData, plateNumber: e.target.value})}
-            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">위반 상황 설명 (AI 자동 작성 가능)</label>
-          <textarea 
-            placeholder="상황을 설명해주세요. (AI 분석 시 자동 입력됨)" 
-            value={reportData.description}
-            onChange={(e) => setReportData({...reportData, description: e.target.value})}
-            rows="3"
-            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
-          />
-        </div>
-
-        <div className="bg-red-50 p-4 rounded-lg flex items-start border border-red-100">
-          <Info size={18} className="text-red-500 mt-0.5 mr-2 shrink-0" />
-          <p className="text-xs text-red-800 leading-relaxed">
-            허위 신고 방지를 위해 <strong>AI 기반 딥페이크/합성 검사</strong>가 제출 전 진행됩니다. 통과 시 본인 인증으로 넘어갑니다.
-          </p>
-        </div>
-      </div>
-
-      <div className="p-4 border-t bg-white sticky bottom-0">
-        <button
-          onClick={startAiDeepfakeVerification}
-          disabled={!reportData.location || !reportData.plateNumber || !reportData.photoUrl}
-          className="w-full bg-slate-800 text-white font-semibold py-4 rounded-xl shadow-md disabled:bg-slate-300 transition-colors"
-        >
-          접수하기 (딥페이크 검사)
-        </button>
-      </div>
-    </div>
-  );
-
-  // 신고 진행중 화면들 (딥페이크 검증, 본인인증, 성공)
-  const renderReportAi = () => (
-    <div className="flex flex-col items-center justify-center h-full bg-slate-50 p-6 text-center">
-      <div className="relative mb-8">
-        <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center animate-pulse">
-          <Camera size={40} className="text-red-500" />
-        </div>
-        <Loader2 size={110} className="text-red-600 animate-spin absolute -inset-1.5 opacity-70" />
-      </div>
-      <h2 className="text-2xl font-bold text-slate-800 mb-3">딥페이크/조작 판별 중</h2>
-      <p className="text-slate-500 text-sm mb-8 leading-relaxed">제출하신 사진의 원본 여부를 분석하고 있습니다.</p>
-    </div>
-  );
-
-  const renderReportAuth = () => {
-    // 인증 완료 후 신고 내역에 추가하고 성공 화면으로 이동
-    const handleAuthComplete = () => {
-      setAuthStep('verifying');
-      setTimeout(() => {
-        const newReport = {
-          id: `2026${Math.floor(Math.random() * 10000)}-R`,
-          date: new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-          location: reportData.location,
-          plateNumber: reportData.plateNumber,
-          status: '접수대기'
-        };
-        setReportHistory([newReport, ...reportHistory]);
-        setSubView('report_success');
-      }, 1500);
-    };
-
-    const handleAuthBack = () => {
-      if (authStep === 'select') setSubView('main');
-      else if (authStep === 'phone') setAuthStep('select');
-      else if (authStep === 'code') setAuthStep('phone');
-    };
-
-    return (
-      <div className="flex flex-col h-full bg-white relative">
-        <div className="px-4 py-4 border-b flex items-center sticky top-0 z-10 bg-white">
-          <button onClick={handleAuthBack} className="p-2 -ml-2 text-slate-600">
-            <ChevronLeft size={24} />
-          </button>
-          <h2 className="text-lg font-semibold ml-2 text-slate-800">본인 인증</h2>
-        </div>
-
-        <div className="flex flex-col items-center justify-center flex-1 p-6">
-          {authStep === 'select' && (
-            <div className="w-full flex flex-col items-center animate-in fade-in zoom-in duration-300">
-              <div className="w-20 h-20 bg-slate-100 rounded-2xl flex items-center justify-center mb-6 shadow-inner">
-                <ShieldCheck size={40} className="text-slate-700" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-800 mb-2">신고자 신분 확인</h3>
-              <p className="text-slate-500 text-center text-sm mb-10 leading-relaxed">
-                정확한 행정 처리를 위해 신고자의<br/>신분을 확인합니다.
-              </p>
-              <div className="w-full space-y-3">
-                <button onClick={() => setAuthStep('phone')} className="w-full bg-[#fae100] hover:bg-[#ebd300] text-[#3c1e1e] font-bold py-4 rounded-xl shadow-sm transition-colors flex items-center justify-center">
-                  <MessageSquare size={18} className="mr-2" /> 카카오톡으로 인증하기
-                </button>
-                <button onClick={() => setAuthStep('phone')} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl shadow-sm transition-colors flex items-center justify-center">
-                  <Smartphone size={18} className="mr-2" /> PASS / 통신사 본인인증
-                </button>
-              </div>
-            </div>
-          )}
-
-          {authStep === 'phone' && (
-            <div className="w-full h-full flex flex-col justify-center animate-in fade-in slide-in-from-right-4 duration-300">
-              <h3 className="text-2xl font-bold text-slate-800 mb-6">휴대폰 번호를<br/>입력해주세요</h3>
-              <div className="space-y-5">
-                <div>
-                  <label className="block text-sm font-medium text-slate-600 mb-1">이름</label>
-                  <input type="text" defaultValue={userProfile.name} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800" readOnly />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-600 mb-1">휴대폰 번호</label>
-                  <input type="tel" defaultValue={userProfile.phone} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800" />
-                </div>
-                <button onClick={() => {
-                  setAuthStep('code');
-                  setTimeLeft(180);
-                  setAuthCode('');
-                }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md mt-4 transition-colors">
-                  인증번호 요청
-                </button>
-              </div>
-            </div>
-          )}
-
-          {authStep === 'code' && (
-            <div className="w-full h-full flex flex-col justify-center animate-in fade-in slide-in-from-right-4 duration-300">
-              <h3 className="text-2xl font-bold text-slate-800 mb-2">인증번호 입력</h3>
-              <p className="text-slate-500 text-sm mb-8">휴대폰으로 전송된 6자리 번호를 입력하세요.<br/>(테스트용: 아무 번호나 6자리 입력)</p>
-              <div className="relative mb-6">
-                <KeyRound className="absolute left-4 top-4 text-slate-400" size={20} />
-                <input 
-                  type="text" 
-                  maxLength={6}
-                  value={authCode}
-                  onChange={(e) => setAuthCode(e.target.value.replace(/[^0-9]/g, ''))}
-                  placeholder="000000" 
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-12 pr-4 py-4 text-xl tracking-[0.3em] font-bold focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                  autoFocus 
-                />
-                <span className={`absolute right-4 top-4 text-sm font-semibold ${timeLeft <= 30 ? 'text-red-600 animate-pulse' : 'text-red-500'}`}>
-                  {formatTime(timeLeft)}
-                </span>
-              </div>
-              <button 
-                onClick={handleAuthComplete} 
-                disabled={authCode.length !== 6 || timeLeft === 0}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed"
-              >
-                {timeLeft === 0 ? '시간 초과 (재요청 바람)' : '인증 완료하기'}
-              </button>
-            </div>
-          )}
-
-          {authStep === 'verifying' && (
-            <div className="w-full flex flex-col items-center justify-center py-10 animate-in fade-in zoom-in duration-300">
-              <Loader2 size={48} className="text-blue-600 animate-spin mb-4" />
-              <p className="text-slate-700 font-medium">본인 확인 중입니다...</p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const renderReportSuccess = () => (
-    <div className="flex flex-col items-center justify-center h-full bg-slate-800 text-white p-6 text-center">
-      <CheckCircle2 size={80} className="text-green-400 mb-6" />
-      <h2 className="text-3xl font-bold mb-4">신고 접수 완료</h2>
-      <div className="bg-slate-700 p-6 rounded-2xl mb-8 w-full max-w-xs text-sm space-y-2">
-        <div className="flex justify-between text-slate-300"><span>접수번호</span><span className="font-semibold text-white">{reportHistory[0]?.id}</span></div>
-        <div className="flex justify-between text-slate-300"><span>차량번호</span><span className="font-semibold text-white">{reportData.plateNumber}</span></div>
-        <div className="flex justify-between text-slate-300"><span>신고위치</span><span className="font-semibold text-white truncate w-32 text-right">{reportData.location}</span></div>
-      </div>
-      <button 
-        onClick={() => {
-          // 신고 관련 모든 데이터 리셋 (다음에 들어올 때 새 폼이 나오도록)
-          setReportData({ location: '', plateNumber: '', description: '', photoUrl: null, photoFile: null });
-          setAuthStep('select');
-          setAuthCode('');
-          navigateTo('home', 'main');
-        }} 
-        className="w-full bg-white text-slate-800 font-bold py-4 rounded-xl shadow-lg hover:bg-slate-50 transition-colors"
-      >
-        홈으로 돌아가기
-      </button>
-    </div>
-  );
-
-  // [신규] 마이페이지 > 프로필 수정 화면
-  const renderEditProfile = () => {
-    const handleSave = () => {
-      setUserProfile(editProfile);
-      showToast('프로필이 성공적으로 변경되었습니다.');
-      setSubView('main');
-    };
-
-    return (
-      <div className="flex flex-col h-full bg-slate-50 relative pb-20">
-        <div className="px-4 py-4 bg-white border-b flex items-center sticky top-0 z-10">
-          <button onClick={() => setSubView('main')} className="p-2 -ml-2 text-slate-600">
-            <ChevronLeft size={24} />
-          </button>
-          <h2 className="text-lg font-semibold ml-2 text-slate-800">내 정보 수정</h2>
-        </div>
-        
-        <div className="p-6 space-y-6 flex-1 overflow-y-auto animate-in fade-in duration-300">
-          <div className="flex justify-center mb-4">
-            <div className="relative">
-              <div className="w-24 h-24 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-3xl font-bold shadow-sm">
-                {editProfile.name.charAt(0)}
-              </div>
-              <button className="absolute bottom-0 right-0 w-8 h-8 bg-white border border-slate-200 rounded-full flex items-center justify-center text-slate-600 shadow-sm active:scale-95 transition-transform">
-                <Camera size={14} />
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">이름</label>
-              <div className="relative">
-                <User className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                <input type="text" value={editProfile.name} onChange={e => setEditProfile({...editProfile, name: e.target.value})} className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">연락처</label>
-              <div className="relative">
-                <Phone className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                <input type="tel" value={editProfile.phone} onChange={e => setEditProfile({...editProfile, phone: e.target.value})} className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">기본 등록 차량</label>
-              <div className="relative">
-                <Car className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                <input type="text" value={editProfile.carNumber} onChange={e => setEditProfile({...editProfile, carNumber: e.target.value})} placeholder="예: 12가3456" className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
-              </div>
-            </div>
-          </div>
-
-          <button onClick={handleSave} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl shadow-md mt-6 flex items-center justify-center transition-colors">
-            <Save size={18} className="mr-2" /> 변경사항 저장
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  // [신규] 마이페이지 > 신고 내역 화면
-  const renderReportHistory = () => (
-    <div className="flex flex-col h-full bg-slate-50 relative pb-20">
-      <div className="px-4 py-4 bg-white border-b flex items-center sticky top-0 z-10">
-        <button onClick={() => setSubView('main')} className="p-2 -ml-2 text-slate-600">
-          <ChevronLeft size={24} />
-        </button>
-        <h2 className="text-lg font-semibold ml-2 text-slate-800">나의 신고 내역</h2>
-      </div>
-      
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 animate-in fade-in duration-300">
-        {reportHistory.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-            <History size={48} className="mb-4 opacity-20" />
-            <p>신고 내역이 없습니다.</p>
-          </div>
-        ) : (
-          reportHistory.map(report => (
-            <div key={report.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col relative overflow-hidden">
-              {/* 장식용 사이드 바 */}
-              <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${report.status === '처리완료' ? 'bg-green-400' : report.status === '접수대기' ? 'bg-indigo-400' : 'bg-amber-400'}`}></div>
-              
-              <div className="flex justify-between items-start mb-3 pl-2">
-                <span className="text-xs font-semibold text-slate-400">{report.date}</span>
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-                  report.status === '처리완료' ? 'bg-green-100 text-green-700' : 
-                  report.status === '접수대기' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'
-                }`}>
-                  {report.status}
-                </span>
-              </div>
-              <div className="pl-2">
-                <h4 className="font-bold text-slate-800 mb-1 truncate text-lg">{report.location}</h4>
-                <p className="text-sm text-slate-500 mb-3 flex items-center"><Car size={14} className="mr-1" /> {report.plateNumber}</p>
-                <div className="text-[11px] text-slate-400 font-mono bg-slate-50 px-2 py-1 rounded inline-block">ID: {report.id}</div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-
-  // [마이페이지]
-  const renderMyPage = () => (
-    <div className="flex flex-col h-full bg-slate-50 pb-20">
-      <div className="px-4 py-6 bg-white shadow-sm border-b mb-4">
-        <div className="flex items-center space-x-4 mb-5">
-          <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-2xl font-bold shadow-sm">
-            {userProfile.name.charAt(0)}
           </div>
           <div>
-            <h2 className="text-xl font-bold text-slate-800">{userProfile.name} 님</h2>
-            <p className="text-sm text-slate-500 mb-1">등록차량: <span className="font-medium text-slate-700">{userProfile.carNumber || '없음'}</span></p>
-            <span className="text-[11px] font-medium bg-slate-100 text-slate-500 px-2 py-1 rounded-full">{userProfile.phone}</span>
+            <label class="block text-sm font-medium text-slate-700 mb-2">차량 번호</label>
+            <input type="text" id="report-plate" placeholder="예: 12가3456" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-2">위반 상황 설명 (AI 자동 작성 가능)</label>
+            <textarea id="report-desc" placeholder="상황을 설명해주세요. (AI 분석 시 자동 입력됨)" rows="3" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"></textarea>
+          </div>
+          <div class="bg-red-50 p-4 rounded-lg flex items-start border border-red-100">
+            <i data-lucide="info" class="w-[18px] h-[18px] text-red-500 mt-0.5 mr-2 shrink-0"></i>
+            <p class="text-xs text-red-800 leading-relaxed">
+              허위 신고 방지를 위해 <strong>AI 기반 딥페이크/합성 검사</strong>가 제출 전 진행됩니다. 통과 시 본인 인증으로 넘어갑니다.
+            </p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => { setEditProfile({...userProfile}); setSubView('edit_profile'); }} className="flex-1 bg-indigo-50 hover:bg-indigo-100 transition-colors py-2.5 rounded-xl text-sm font-semibold text-indigo-700 flex items-center justify-center">
-            <Edit3 size={16} className="mr-1.5" /> 내 정보 수정
+        <div class="p-4 border-t bg-white sticky bottom-0">
+          <button id="btn-report-submit" disabled class="w-full bg-slate-800 text-white font-semibold py-4 rounded-xl shadow-md disabled:bg-slate-300 transition-colors">
+            접수하기 (딥페이크 검사)
           </button>
         </div>
       </div>
 
-      <div className="px-4 space-y-3">
-        <div onClick={() => setSubView('report_history')} className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-100 active:scale-95 transition-all group">
-          <div className="flex items-center"><div className="p-2 bg-indigo-50 rounded-xl mr-3 group-hover:bg-indigo-100 transition-colors"><History size={18} className="text-indigo-600" /></div><span className="font-semibold text-slate-700">나의 신고 내역</span></div>
-          <div className="flex items-center">
-            <span className="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-full mr-2">{reportHistory.length}</span>
-            <ChevronRight size={18} className="text-slate-300" />
+      <!-- 2. AI 딥페이크 판별 -->
+      <div id="view-report-ai" class="app-view hidden flex-col items-center justify-center h-full bg-slate-50 p-6 text-center zoom-in">
+        <div class="relative mb-8">
+          <div class="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center animate-pulse">
+            <i data-lucide="camera" class="w-10 h-10 text-red-500"></i>
           </div>
+          <i data-lucide="loader-2" class="w-[110px] h-[110px] text-red-600 animate-spin absolute -inset-1.5 opacity-70"></i>
         </div>
-        <div className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between cursor-pointer active:scale-95 transition-transform">
-          <div className="flex items-center"><div className="p-2 bg-blue-50 rounded-xl mr-3"><CreditCard size={18} className="text-blue-600" /></div><span className="font-semibold text-slate-700">결제 수단 관리</span></div>
-          <ChevronRight size={18} className="text-slate-300" />
+        <h2 class="text-2xl font-bold text-slate-800 mb-3">딥페이크/조작 판별 중</h2>
+        <p class="text-slate-500 text-sm mb-8 leading-relaxed">제출하신 사진의 원본 여부를 분석하고 있습니다.</p>
+      </div>
+
+      <!-- 3. 본인 인증 화면 -->
+      <div id="view-report-auth" class="app-view hidden flex-col h-full bg-white relative">
+        <div class="px-4 py-4 border-b flex items-center sticky top-0 z-10 bg-white">
+          <button id="btn-auth-back" class="p-2 -ml-2 text-slate-600"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+          <h2 class="text-lg font-semibold ml-2 text-slate-800">본인 인증</h2>
         </div>
-        <div className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between cursor-pointer active:scale-95 transition-transform">
-          <div className="flex items-center"><div className="p-2 bg-slate-100 rounded-xl mr-3"><Info size={18} className="text-slate-500" /></div><span className="font-semibold text-slate-700">고객 센터</span></div>
-          <ChevronRight size={18} className="text-slate-300" />
+        <div id="auth-content-area" class="flex flex-col items-center justify-center flex-1 p-6 relative overflow-hidden">
+           <!-- JS에서 동적으로 내용 교체 -->
         </div>
       </div>
-    </div>
-  );
 
-  // 현재 라우팅 렌더러
-  const renderCurrentView = () => {
-    if (activeTab === 'home') return renderHome();
-    if (activeTab === 'search') {
-      if (subView === 'main') return renderSearchMain();
-      if (subView === 'detail') return renderSearchDetail();
-      if (subView === 'grid') return renderSearchGrid();
-    }
-    if (activeTab === 'report') {
-      if (subView === 'main') return renderReportMain();
-      if (subView === 'report_ai') return renderReportAi();
-      if (subView === 'report_auth') return renderReportAuth();
-      if (subView === 'report_success') return renderReportSuccess();
-    }
-    if (activeTab === 'mypage') {
-      if (subView === 'main') return renderMyPage();
-      if (subView === 'edit_profile') return renderEditProfile();
-      if (subView === 'report_history') return renderReportHistory();
-    }
-    return renderHome();
-  };
+      <!-- 4. 신고 완료 -->
+      <div id="view-report-success" class="app-view hidden flex-col items-center justify-center h-full bg-slate-800 text-white p-6 text-center zoom-in">
+        <i data-lucide="check-circle-2" class="w-20 h-20 text-green-400 mb-6"></i>
+        <h2 class="text-3xl font-bold mb-4">신고 접수 완료</h2>
+        <div class="bg-slate-700 p-6 rounded-2xl mb-8 w-full max-w-xs text-sm space-y-2">
+          <div class="flex justify-between text-slate-300"><span>접수번호</span><span id="success-id" class="font-semibold text-white"></span></div>
+          <div class="flex justify-between text-slate-300"><span>차량번호</span><span id="success-plate" class="font-semibold text-white"></span></div>
+          <div class="flex justify-between text-slate-300"><span>신고위치</span><span id="success-loc" class="font-semibold text-white truncate w-32 text-right"></span></div>
+        </div>
+        <button onclick="resetReportData(); navigateTo('home')" class="w-full bg-white text-slate-800 font-bold py-4 rounded-xl shadow-lg hover:bg-slate-50 transition-colors">
+          홈으로 돌아가기
+        </button>
+      </div>
 
-  const hideBottomNav = 
-    (activeTab === 'search' && subView === 'grid') || 
-    (activeTab === 'report' && ['report_ai', 'report_auth', 'report_success'].includes(subView)) ||
-    (activeTab === 'mypage' && ['edit_profile', 'report_history'].includes(subView));
-
-  return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-      <style>{`
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-      `}</style>
-      <div className="w-full h-[100dvh] sm:h-[850px] max-w-[400px] bg-white sm:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col">
-        {/* 모바일 노치(Notch) */}
-        <div className="hidden sm:block absolute top-0 left-1/2 transform -translate-x-1/2 w-40 h-7 bg-slate-900 rounded-b-3xl z-50"></div>
-        
-        {/* [신규] 토스트 알림 */}
-        {toastMsg && (
-          <div className="absolute top-12 left-1/2 transform -translate-x-1/2 z-50 w-[90%] max-w-xs animate-in slide-in-from-top-4 fade-in duration-300">
-            <div className="bg-slate-800/95 backdrop-blur-sm text-white text-sm font-medium px-4 py-3 rounded-xl shadow-xl flex items-center">
-              <CheckCircle2 size={18} className="text-green-400 mr-2 shrink-0" />
-              {toastMsg}
+      <!-- ==================== [MYPAGE 탭] ==================== -->
+      <!-- 1. 마이페이지 메인 -->
+      <div id="view-mypage-main" class="app-view hidden h-full flex flex-col bg-slate-50 pb-20 fade-in">
+        <div class="px-4 py-6 bg-white shadow-sm border-b mb-4">
+          <div class="flex items-center space-x-4 mb-5">
+            <div id="mypage-avatar" class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-2xl font-bold shadow-sm">김</div>
+            <div>
+              <h2 id="mypage-name" class="text-xl font-bold text-slate-800">김주차 님</h2>
+              <p class="text-sm text-slate-500 mb-1">등록차량: <span id="mypage-car" class="font-medium text-slate-700">12가3456</span></p>
+              <span id="mypage-phone" class="text-[11px] font-medium bg-slate-100 text-slate-500 px-2 py-1 rounded-full">010-1234-5678</span>
             </div>
           </div>
-        )}
-
-        {/* 메인 화면 영역 */}
-        <div className="flex-1 overflow-hidden relative">
-          {renderCurrentView()}
-        </div>
-
-        {/* 하단 탭 네비게이션 */}
-        {!hideBottomNav && (
-          <div className="absolute bottom-0 w-full h-16 bg-white border-t border-slate-100 flex justify-around items-center px-2 z-40 pb-safe">
-            <button onClick={() => navigateTo('home')} className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'home' ? 'text-slate-800' : 'text-slate-400'}`}>
-              <Home size={22} className={activeTab === 'home' ? 'fill-slate-800' : ''} />
-              <span className="text-[10px] mt-1 font-medium">홈</span>
-            </button>
-            <button onClick={() => navigateTo('search', 'main')} className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'search' ? 'text-blue-600' : 'text-slate-400'}`}>
-              <MapIcon size={22} className={activeTab === 'search' ? 'fill-blue-100' : ''} />
-              <span className="text-[10px] mt-1 font-medium">주차장</span>
-            </button>
-            <button onClick={() => navigateTo('report', 'main')} className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'report' ? 'text-red-500' : 'text-slate-400'}`}>
-              <AlertTriangle size={22} className={activeTab === 'report' ? 'fill-red-100' : ''} />
-              <span className="text-[10px] mt-1 font-medium">신고</span>
-            </button>
-            <button onClick={() => navigateTo('mypage')} className={`flex flex-col items-center p-2 transition-colors ${activeTab === 'mypage' ? 'text-slate-800' : 'text-slate-400'}`}>
-              <User size={22} className={activeTab === 'mypage' ? 'fill-slate-800' : ''} />
-              <span className="text-[10px] mt-1 font-medium">마이</span>
+          <div class="flex gap-2">
+            <button onclick="setupEditProfile(); navigateTo('mypage', 'edit')" class="flex-1 bg-indigo-50 hover:bg-indigo-100 transition-colors py-2.5 rounded-xl text-sm font-semibold text-indigo-700 flex items-center justify-center">
+              <i data-lucide="edit-3" class="w-4 h-4 mr-1.5"></i> 내 정보 수정
             </button>
           </div>
-        )}
+        </div>
+        <div class="px-4 space-y-3">
+          <div onclick="renderReportHistory(); navigateTo('mypage', 'history')" class="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-100 active:scale-95 transition-all group p-4">
+            <div class="flex items-center"><div class="p-2 bg-indigo-50 rounded-xl mr-3 group-hover:bg-indigo-100 transition-colors"><i data-lucide="history" class="w-[18px] h-[18px] text-indigo-600"></i></div><span class="font-semibold text-slate-700">나의 신고 내역</span></div>
+            <div class="flex items-center">
+              <span id="mypage-history-count" class="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-full mr-2">1</span>
+              <i data-lucide="chevron-right" class="w-[18px] h-[18px] text-slate-300"></i>
+            </div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between cursor-pointer active:scale-95 transition-transform">
+            <div class="flex items-center"><div class="p-2 bg-blue-50 rounded-xl mr-3"><i data-lucide="credit-card" class="w-[18px] h-[18px] text-blue-600"></i></div><span class="font-semibold text-slate-700">결제 수단 관리</span></div>
+            <i data-lucide="chevron-right" class="w-[18px] h-[18px] text-slate-300"></i>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between cursor-pointer active:scale-95 transition-transform">
+            <div class="flex items-center"><div class="p-2 bg-slate-100 rounded-xl mr-3"><i data-lucide="info" class="w-[18px] h-[18px] text-slate-500"></i></div><span class="font-semibold text-slate-700">고객 센터</span></div>
+            <i data-lucide="chevron-right" class="w-[18px] h-[18px] text-slate-300"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 프로필 수정 -->
+      <div id="view-mypage-edit" class="app-view hidden h-full flex flex-col bg-slate-50 relative pb-20 fade-in">
+        <div class="px-4 py-4 bg-white border-b flex items-center sticky top-0 z-10">
+          <button onclick="navigateTo('mypage', 'main')" class="p-2 -ml-2 text-slate-600"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+          <h2 class="text-lg font-semibold ml-2 text-slate-800">내 정보 수정</h2>
+        </div>
+        <div class="p-6 space-y-6 flex-1 overflow-y-auto">
+          <div class="flex justify-center mb-4">
+            <div class="relative">
+              <div id="edit-avatar" class="w-24 h-24 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-3xl font-bold shadow-sm">김</div>
+              <button class="absolute bottom-0 right-0 w-8 h-8 bg-white border border-slate-200 rounded-full flex items-center justify-center text-slate-600 shadow-sm active:scale-95 transition-transform">
+                <i data-lucide="camera" class="w-[14px] h-[14px]"></i>
+              </button>
+            </div>
+          </div>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1.5">이름</label>
+              <div class="relative">
+                <i data-lucide="user" class="absolute left-3 top-3.5 text-slate-400 w-[18px] h-[18px]"></i>
+                <input type="text" id="edit-name" class="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1.5">연락처</label>
+              <div class="relative">
+                <i data-lucide="phone" class="absolute left-3 top-3.5 text-slate-400 w-[18px] h-[18px]"></i>
+                <input type="tel" id="edit-phone" class="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1.5">기본 등록 차량</label>
+              <div class="relative">
+                <i data-lucide="car" class="absolute left-3 top-3.5 text-slate-400 w-[18px] h-[18px]"></i>
+                <input type="text" id="edit-car" placeholder="예: 12가3456" class="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
+              </div>
+            </div>
+          </div>
+          <button onclick="saveProfile()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl shadow-md mt-6 flex items-center justify-center transition-colors">
+            <i data-lucide="save" class="w-[18px] h-[18px] mr-2"></i> 변경사항 저장
+          </button>
+        </div>
+      </div>
+
+      <!-- 3. 신고 내역 -->
+      <div id="view-mypage-history" class="app-view hidden h-full flex flex-col bg-slate-50 relative pb-20 fade-in">
+        <div class="px-4 py-4 bg-white border-b flex items-center sticky top-0 z-10">
+          <button onclick="navigateTo('mypage', 'main')" class="p-2 -ml-2 text-slate-600"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
+          <h2 class="text-lg font-semibold ml-2 text-slate-800">나의 신고 내역</h2>
+        </div>
+        <div id="history-list" class="flex-1 overflow-y-auto p-4 space-y-3">
+          <!-- JS 렌더링 -->
+        </div>
       </div>
     </div>
-  );
-}
+
+    <!-- 하단 탭 네비게이션 -->
+    <div id="bottom-nav" class="absolute bottom-0 w-full h-16 bg-white border-t border-slate-100 flex justify-around items-center px-2 z-40 pb-safe">
+      <button onclick="navigateTo('home')" class="nav-btn flex flex-col items-center p-2 transition-colors text-slate-800" data-tab="home">
+        <i data-lucide="home" class="w-[22px] h-[22px] fill-slate-800 icon-fill"></i>
+        <span class="text-[10px] mt-1 font-medium">홈</span>
+      </button>
+      <button onclick="navigateTo('search')" class="nav-btn flex flex-col items-center p-2 transition-colors text-slate-400" data-tab="search">
+        <i data-lucide="map" class="w-[22px] h-[22px] icon-fill"></i>
+        <span class="text-[10px] mt-1 font-medium">주차장</span>
+      </button>
+      <button onclick="navigateTo('report')" class="nav-btn flex flex-col items-center p-2 transition-colors text-slate-400" data-tab="report">
+        <i data-lucide="alert-triangle" class="w-[22px] h-[22px] icon-fill"></i>
+        <span class="text-[10px] mt-1 font-medium">신고</span>
+      </button>
+      <button onclick="navigateTo('mypage')" class="nav-btn flex flex-col items-center p-2 transition-colors text-slate-400" data-tab="mypage">
+        <i data-lucide="user" class="w-[22px] h-[22px] icon-fill"></i>
+        <span class="text-[10px] mt-1 font-medium">마이</span>
+      </button>
+    </div>
+
+  </div>
+
+  <!-- 메인 스크립트 로직 -->
+  <script>
+    // ==========================================
+    // 설정 및 공통 유틸리티
+    // ==========================================
+    const apiKey = ""; // Gemini API Key
+    
+    lucide.createIcons();
+
+    const fetchWithRetry = async (url, options, retries = 5) => {
+      const delays = [1000, 2000, 4000, 8000, 16000];
+      for (let i = 0; i < retries; i++) {
+          try {
+              const res = await fetch(url, options);
+              if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+              return await res.json();
+          } catch (e) {
+              if (i === retries - 1) throw e;
+              await new Promise(r => setTimeout(r, delays[i]));
+          }
+      }
+    };
+
+    const getBase64 = (file) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = error => reject(error);
+    });
+
+    const showToast = (msg) => {
+      const toast = document.getElementById('toast-container');
+      document.getElementById('toast-message').textContent = msg;
+      toast.classList.remove('hidden');
+      toast.classList.add('toast-enter');
+      setTimeout(() => {
+        toast.classList.add('hidden');
+        toast.classList.remove('toast-enter');
+      }, 3000);
+    };
+
+    // ==========================================
+    // 앱 상태 (State)
+    // ==========================================
+    let activeTab = 'home';
+    let currentSubView = 'main';
+    
+    // 주차장 데이터
+    const PARKING_DB = [
+      { id: 1, name: '수원시청 부설주차장', address: '경기 수원시 팔달구 효원로 241', total: 300, available: 42, fee: '최초 30분 무료, 이후 10분당 500원', hours: '평일 09:00~18:00 (주말 무료)', distance: '1.2km' },
+      { id: 2, name: '수원역 환승공영주차장', address: '경기 수원시 권선구 세화로 136', total: 500, available: 5, fee: '10분당 400원, 일 최대 4,000원', hours: '24시간 연중무휴', distance: '3.5km' },
+      { id: 3, name: '강남역 1번출구 공영주차장', address: '서울 강남구 테헤란로 101', total: 120, available: 18, fee: '5분당 400원', hours: '24시간 연중무휴', distance: '31km' },
+      { id: 4, name: '광교중앙역 환승센터 주차장', address: '경기 수원시 영통구 광교중앙로 245', total: 250, available: 120, fee: '10분당 300원', hours: '05:00 ~ 01:00', distance: '4.1km' },
+      { id: 5, name: '행궁동 공영주차장', address: '경기 수원시 팔달구 정조로 825', total: 80, available: 0, fee: '최초 30분 400원, 이후 10분당 200원', hours: '10:00 ~ 20:00', distance: '2.8km' },
+      { id: 6, name: '코엑스 동문 지하주차장', address: '서울 강남구 영동대로 513', total: 1500, available: 430, fee: '15분당 1,500원', hours: '24시간 연중무휴', distance: '34km' },
+    ];
+    let recentSearches = ['수원시청', '강남역', '광교'];
+    let selectedLot = null;
+    let selectedFloor = 'B1';
+    let isAiChatOpen = false;
+
+    // 사용자 및 신고 데이터
+    let userProfile = { name: '김주차', phone: '010-1234-5678', carNumber: '12가3456' };
+    let reportHistory = [{ id: '20260701-A01', date: '2026-07-01 14:30', location: '수원시청 앞', plateNumber: '99하9999', status: '처리완료' }];
+    
+    let reportData = { location: '', plateNumber: '', description: '', photoUrl: null, photoFile: null };
+    
+    let authStep = 'select';
+    let timeLeft = 180;
+    let timerInterval = null;
+
+    // ==========================================
+    // 라우팅 (Navigation)
+    // ==========================================
+    function navigateTo(tab, view = 'main') {
+      
+      // ✅ [중요] 완료된 상태(success)에서 다른 화면이나 네비게이션으로 나갈 때 확실히 양식 초기화 (리셋 로직 강화)
+      if (currentSubView === 'report_success' && (tab !== 'report' || view !== 'report_success')) {
+        resetReportData();
+      }
+      
+      // 하단 네비게이션 '신고' 탭 터치 시, 만약 이전에 신고 완료 상태였다면 무조건 폼 초기화 보장
+      if (tab === 'report' && view === 'main' && currentSubView === 'report_success') {
+        resetReportData();
+      }
+
+      activeTab = tab;
+      currentSubView = view;
+      
+      // 숨김 처리 로직 (네비게이션 탭)
+      const hideBottomNav = 
+        (tab === 'search' && view === 'grid') || 
+        (tab === 'report' && ['report_ai', 'report_auth', 'report_success'].includes(view)) ||
+        (tab === 'mypage' && ['edit', 'history'].includes(view));
+        
+      document.getElementById('bottom-nav').style.display = hideBottomNav ? 'none' : 'flex';
+
+      // 탭 UI 갱신
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        const isSelected = btn.dataset.tab === tab;
+        const icon = btn.querySelector('.icon-fill');
+        
+        btn.classList.toggle('text-slate-800', isSelected && tab === 'home');
+        btn.classList.toggle('text-blue-600', isSelected && tab === 'search');
+        btn.classList.toggle('text-red-500', isSelected && tab === 'report');
+        btn.classList.toggle('text-slate-800', isSelected && tab === 'mypage');
+        
+        if(!isSelected) btn.classList.add('text-slate-400');
+        else btn.classList.remove('text-slate-400');
+
+        icon.classList.remove('fill-slate-800', 'fill-blue-100', 'fill-red-100');
+        if (isSelected) {
+          if(tab === 'home') icon.classList.add('fill-slate-800');
+          if(tab === 'search') icon.classList.add('fill-blue-100');
+          if(tab === 'report') icon.classList.add('fill-red-100');
+          if(tab === 'mypage') icon.classList.add('fill-slate-800');
+        }
+      });
+
+      // 뷰 갱신
+      document.querySelectorAll('.app-view').forEach(el => el.classList.add('hidden'));
+      let targetId = `view-${tab}`;
+      if (view !== 'main') targetId += `-${view}`;
+      // Search 예외처리 (main 뷰가 id가 view-search-main임)
+      if(tab === 'search' && view === 'main') targetId = 'view-search-main';
+      if(tab === 'report' && view === 'main') targetId = 'view-report-main';
+      if(tab === 'mypage' && view === 'main') targetId = 'view-mypage-main';
+      
+      const targetEl = document.getElementById(targetId);
+      if(targetEl) targetEl.classList.remove('hidden');
+
+      // 뷰 진입 시 초기화 함수들 호출
+      if (tab === 'home') renderHome();
+      if (tab === 'search' && view === 'main') renderSearchMain();
+      if (tab === 'search' && view === 'detail') renderSearchDetail();
+      if (tab === 'search' && view === 'grid') renderSearchGrid();
+      if (tab === 'mypage' && view === 'main') renderMyPage();
+
+      lucide.createIcons();
+    }
+
+    // ==========================================
+    // 홈 화면 로직
+    // ==========================================
+    function renderHome() {
+      document.getElementById('home-user-avatar').textContent = userProfile.name.charAt(0);
+      const listContainer = document.getElementById('home-nearby-list');
+      listContainer.innerHTML = '';
+      PARKING_DB.slice(0, 2).forEach(lot => {
+        const item = document.createElement('div');
+        item.className = "bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center cursor-pointer active:bg-slate-50";
+        item.onclick = () => { handleSelectLot(lot); };
+        item.innerHTML = `
+          <div>
+            <h4 class="font-semibold text-slate-800">${lot.name}</h4>
+            <p class="text-xs text-slate-500 mt-1">${lot.distance} · ${lot.fee.split(',')[0]}</p>
+          </div>
+          <div class="text-right">
+            <span class="text-sm font-bold ${lot.available > 0 ? 'text-green-500' : 'text-red-500'}">${lot.available > 0 ? lot.available + '자리' : '만차'}</span>
+            <p class="text-xs text-slate-400">/ ${lot.total}</p>
+          </div>
+        `;
+        listContainer.appendChild(item);
+      });
+      // ✅ [점검 완료] DOM 갱신 후 아이콘 활성화 누락 수정
+      lucide.createIcons();
+    }
+
+    // ==========================================
+    // 주차장 검색 및 AI 로직
+    // ==========================================
+    const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear-btn');
+    const searchContentArea = document.getElementById('search-content-area');
+
+    searchInput.addEventListener('input', (e) => {
+      const q = e.target.value.trim();
+      if(q.length > 0) searchClear.classList.remove('hidden');
+      else searchClear.classList.add('hidden');
+      renderSearchMain(q);
+    });
+
+    searchClear.addEventListener('click', () => {
+      searchInput.value = '';
+      searchClear.classList.add('hidden');
+      renderSearchMain('');
+    });
+
+    function renderSearchMain(query = searchInput.value.trim()) {
+      searchContentArea.innerHTML = '';
+      if (!query && !isAiChatOpen) {
+        // 최근 검색
+        let html = `<h3 class="text-xs font-semibold text-slate-400 mb-3 flex items-center"><i data-lucide="history" class="w-3.5 h-3.5 mr-1"></i> 최근 검색</h3><div class="flex flex-wrap gap-2">`;
+        recentSearches.forEach(term => {
+          html += `<button onclick="searchInput.value='${term}'; searchInput.dispatchEvent(new Event('input'));" class="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-sm text-slate-600 hover:bg-slate-100">${term}</button>`;
+        });
+        html += `</div>`;
+        searchContentArea.innerHTML = html;
+      } else if (query) {
+        // 결과
+        const results = PARKING_DB.filter(lot => lot.name.includes(query) || lot.address.includes(query));
+        if (results.length > 0) {
+          let html = `<div class="divide-y divide-slate-100">`;
+          results.forEach(lot => {
+            html += `
+              <div onclick='handleSelectLotById(${lot.id})' class="p-4 hover:bg-slate-50 cursor-pointer transition-colors">
+                <h4 class="font-semibold text-slate-800 mb-1">${lot.name}</h4>
+                <p class="text-xs text-slate-500 mb-2">${lot.address}</p>
+                <div class="flex gap-2">
+                  <span class="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded">거리 ${lot.distance}</span>
+                  <span class="text-xs px-2 py-1 rounded font-medium ${lot.available > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${lot.available > 0 ? lot.available + '대 가능' : '만차'}</span>
+                </div>
+              </div>`;
+          });
+          html += `</div>`;
+          searchContentArea.innerHTML = html;
+        } else {
+          searchContentArea.innerHTML = `<div class="flex flex-col items-center justify-center pt-20 text-slate-400"><i data-lucide="search" class="w-10 h-10 mb-3 opacity-20"></i><p class="text-sm">검색 결과가 없습니다.</p></div>`;
+        }
+      }
+      lucide.createIcons();
+    }
+
+    function handleSelectLotById(id) {
+      const lot = PARKING_DB.find(l => l.id === id);
+      if(lot) handleSelectLot(lot);
+    }
+
+    function handleSelectLot(lot) {
+      selectedLot = lot;
+      if (!recentSearches.includes(lot.name)) {
+        recentSearches = [lot.name, ...recentSearches].slice(0, 5);
+      }
+      navigateTo('search', 'detail');
+    }
+
+    function renderSearchDetail() {
+      if(!selectedLot) return;
+      document.getElementById('detail-title').textContent = selectedLot.name;
+      document.getElementById('detail-name').textContent = selectedLot.name;
+      document.getElementById('detail-address').textContent = selectedLot.address;
+      document.getElementById('detail-total').textContent = selectedLot.total + '대';
+      
+      const availEl = document.getElementById('detail-available');
+      availEl.textContent = selectedLot.available + '대';
+      availEl.className = `font-bold text-lg ${selectedLot.available > 0 ? 'text-green-600' : 'text-red-500'}`;
+      
+      document.getElementById('detail-hours').textContent = selectedLot.hours;
+      document.getElementById('detail-fee').textContent = selectedLot.fee;
+
+      const gridBtn = document.getElementById('detail-grid-btn');
+      gridBtn.disabled = selectedLot.available === 0;
+      gridBtn.textContent = selectedLot.available === 0 ? '현재 만차입니다' : '층별 실시간 현황 보기';
+    }
+
+    function renderSearchGrid() {
+      if(!selectedLot) return;
+      document.getElementById('grid-title').textContent = selectedLot.name;
+      
+      const floorsContainer = document.getElementById('grid-floors');
+      floorsContainer.innerHTML = '';
+      ['1F', 'B1', 'B2', 'B3'].forEach(floor => {
+        const btn = document.createElement('button');
+        btn.textContent = floor + '층';
+        btn.className = `px-5 py-2 rounded-full font-medium text-sm transition-colors whitespace-nowrap ${selectedFloor === floor ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`;
+        btn.onclick = () => { selectedFloor = floor; renderSearchGrid(); };
+        floorsContainer.appendChild(btn);
+      });
+
+      document.getElementById('grid-current-floor').textContent = `${selectedFloor} 주차 현황`;
+
+      // 스팟 생성
+      const spotsContainer = document.getElementById('grid-spots-container');
+      spotsContainer.innerHTML = '';
+      const availRatio = selectedLot.available / selectedLot.total;
+      
+      for(let i=0; i<20; i++) {
+        const isAvail = Math.random() < availRatio;
+        const div = document.createElement('div');
+        // ✅ [점검 완료] 주차 불가(주차됨)시 명확한 빨간색 처리 적용 확인
+        const colorClass = isAvail ? 'bg-green-500 ring-2 ring-green-300 ring-offset-1' : 'bg-red-500 opacity-90';
+        const sideClass = i % 2 === 0 ? 'rounded-r-none border-r-4 border-slate-300' : 'rounded-l-none border-l-4 border-slate-300';
+        div.className = `h-12 rounded flex items-center justify-center font-bold text-xs text-white shadow-inner transition-all ${colorClass} ${sideClass}`;
+        
+        if(isAvail) {
+          div.textContent = 'P';
+        } else {
+          div.innerHTML = `<i data-lucide="car" class="w-4 h-4 opacity-90"></i>`;
+        }
+        spotsContainer.appendChild(div);
+      }
+      lucide.createIcons();
+    }
+
+    // AI 주차 비서 토글
+    document.getElementById('ai-chat-toggle-btn').addEventListener('click', () => {
+      isAiChatOpen = !isAiChatOpen;
+      const toggleBtn = document.getElementById('ai-chat-toggle-btn');
+      const chatContainer = document.getElementById('ai-chat-container');
+      
+      if(isAiChatOpen) {
+        toggleBtn.className = "w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center transition-colors bg-indigo-100 text-indigo-700";
+        toggleBtn.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4 mr-1.5"></i> <span>AI 비서 닫기</span>`;
+        chatContainer.classList.remove('hidden');
+      } else {
+        toggleBtn.className = "w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center transition-colors bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-sm";
+        toggleBtn.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4 mr-1.5"></i> <span>✨ AI 주차 비서에게 맞춤 추천 받기</span>`;
+        chatContainer.classList.add('hidden');
+      }
+      renderSearchMain();
+      lucide.createIcons();
+    });
+
+    document.getElementById('ai-chat-input').addEventListener('keydown', (e) => {
+      if(e.key === 'Enter') handleAskAiParking();
+    });
+    document.getElementById('ai-chat-send-btn').addEventListener('click', handleAskAiParking);
+
+    async function handleAskAiParking() {
+      const inputEl = document.getElementById('ai-chat-input');
+      const sendBtn = document.getElementById('ai-chat-send-btn');
+      const val = inputEl.value.trim();
+      if(!val) return;
+
+      inputEl.disabled = true;
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = `<i data-lucide="loader-2" class="w-[18px] h-[18px] animate-spin"></i>`;
+      lucide.createIcons();
+      document.getElementById('ai-chat-response').classList.add('hidden');
+
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        const dbContext = JSON.stringify(PARKING_DB.map(p => ({
+          이름: p.name, 남은자리: p.available, 요금: p.fee, 운영시간: p.hours, 거리: p.distance
+        })));
+        
+        const prompt = `사용자의 질문: "${val}"\n\n주차장 데이터: ${dbContext}\n\n위 데이터를 바탕으로 사용자의 조건(가격, 거리, 남은 자리 등)에 가장 잘 맞는 주차장을 추천해줘. 답변은 2-3문장으로 핵심만 친절하게 말해줘.`;
+        
+        const result = await fetchWithRetry(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: "당신은 사용자에게 딱 맞는 주차장을 찾아주는 훌륭한 주차 비서 '주차해결사 AI'입니다." }] }
+          })
+        });
+
+        const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text || '죄송합니다. 추천을 불러오지 못했습니다.';
+        document.getElementById('ai-chat-response-text').textContent = responseText;
+        document.getElementById('ai-chat-response').classList.remove('hidden');
+      } catch (error) {
+        document.getElementById('ai-chat-response-text').textContent = "AI 통신 중 오류가 발생했습니다. 다시 시도해주세요.";
+        document.getElementById('ai-chat-response').classList.remove('hidden');
+      } finally {
+        inputEl.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = `<i data-lucide="arrow-up-circle" class="w-[22px] h-[22px]"></i>`;
+        lucide.createIcons();
+      }
+    }
+
+
+    // ==========================================
+    // 불법 주차 신고 로직
+    // ==========================================
+    const reportFileInput = document.getElementById('report-file-input');
+    const photoPreview = document.getElementById('report-photo-preview');
+    const photoPlaceholder = document.getElementById('report-photo-placeholder');
+    const photoImg = document.getElementById('report-photo-img');
+    const btnAiAnalyze = document.getElementById('btn-ai-analyze');
+    
+    const inputLoc = document.getElementById('report-location');
+    const inputPlate = document.getElementById('report-plate');
+    const inputDesc = document.getElementById('report-desc');
+    const btnSubmitReport = document.getElementById('btn-report-submit');
+
+    function checkReportFormReady() {
+      const isReady = reportData.photoUrl && reportData.location && reportData.plateNumber;
+      btnSubmitReport.disabled = !isReady;
+    }
+
+    [inputLoc, inputPlate, inputDesc].forEach(el => {
+      el.addEventListener('input', (e) => {
+        if(el.id === 'report-location') reportData.location = e.target.value;
+        if(el.id === 'report-plate') reportData.plateNumber = e.target.value;
+        if(el.id === 'report-desc') reportData.description = e.target.value;
+        checkReportFormReady();
+      });
+    });
+
+    reportFileInput.addEventListener('change', (e) => {
+      if(e.target.files && e.target.files[0]) {
+        reportData.photoFile = e.target.files[0];
+        reportData.photoUrl = URL.createObjectURL(reportData.photoFile);
+        
+        photoImg.src = reportData.photoUrl;
+        photoPreview.classList.remove('hidden');
+        photoPlaceholder.classList.add('hidden');
+        btnAiAnalyze.classList.remove('hidden');
+        checkReportFormReady();
+      }
+    });
+
+    btnAiAnalyze.addEventListener('click', async () => {
+      if(!reportData.photoFile) return;
+      btnAiAnalyze.disabled = true;
+      btnAiAnalyze.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> 사진 분석 중...`;
+      lucide.createIcons();
+
+      try {
+        const base64String = await getBase64(reportData.photoFile);
+        const base64Data = base64String.split(',')[1];
+        
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        const prompt = "이 사진은 불법 주차 신고를 위한 차량 사진입니다. 사진을 분석해서 두 가지를 추출해주세요: 1) 차량 번호판이 보인다면 번호를 추출하세요. 안 보이면 '미상'이라고 적으세요. 2) 불법 주차 정황(예: 횡단보도 위, 소화전 옆, 이중주차, 갓길 등) 및 차량 색상을 1문장으로 묘사하세요. 응답은 반드시 아래 JSON 형식으로만 반환하세요: {\"plateNumber\": \"차량번호\", \"description\": \"정황설명\"}";
+
+        const payload = {
+          contents: [{
+            role: "user",
+            parts: [{ text: prompt }, { inlineData: { mimeType: reportData.photoFile.type, data: base64Data } }]
+          }],
+          generationConfig: { 
+            responseMimeType: "application/json",
+            responseSchema: { type: "OBJECT", properties: { plateNumber: { type: "STRING" }, description: { type: "STRING" } } }
+          }
+        };
+
+        const result = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (text) {
+          const parsed = JSON.parse(text);
+          if(parsed.plateNumber !== '미상') {
+            reportData.plateNumber = parsed.plateNumber;
+            inputPlate.value = parsed.plateNumber;
+          }
+          if(parsed.description) {
+            reportData.description = parsed.description;
+            inputDesc.value = parsed.description;
+          }
+          checkReportFormReady();
+          showToast('AI가 사진 분석을 완료했습니다.');
+        }
+      } catch (error) {
+        console.error(error);
+        alert("AI 분석에 실패했습니다. 직접 입력해주세요.");
+      } finally {
+        btnAiAnalyze.disabled = false;
+        btnAiAnalyze.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4 mr-2"></i> ✨ AI 사진 분석 및 자동 입력`;
+        lucide.createIcons();
+      }
+    });
+
+    btnSubmitReport.addEventListener('click', () => {
+      navigateTo('report', 'report_ai');
+      setTimeout(() => {
+        authStep = 'select';
+        renderAuthStep();
+        navigateTo('report', 'report_auth');
+      }, 2000);
+    });
+
+    // ✅ [점검 완료] 신고 양식 완벽 초기화 
+    function resetReportData() {
+      reportData = { location: '', plateNumber: '', description: '', photoUrl: null, photoFile: null };
+      inputLoc.value = ''; inputPlate.value = ''; inputDesc.value = '';
+      photoPreview.classList.add('hidden');
+      photoPlaceholder.classList.remove('hidden');
+      btnAiAnalyze.classList.add('hidden');
+      reportFileInput.value = '';
+      authStep = 'select';
+      checkReportFormReady();
+    }
+
+    // ==========================================
+    // 본인 인증 로직
+    // ==========================================
+    const authContent = document.getElementById('auth-content-area');
+    
+    // ✅ [점검 완료] 뒤로가기 버튼 로직 강화 (타이머 중지 포함)
+    document.getElementById('btn-auth-back').addEventListener('click', () => {
+      if (authStep === 'select') navigateTo('report', 'main');
+      else if (authStep === 'phone') { authStep = 'select'; renderAuthStep(); }
+      else if (authStep === 'code') { authStep = 'phone'; stopTimer(); renderAuthStep(); }
+    });
+
+    function renderAuthStep() {
+      authContent.innerHTML = '';
+      if(authStep === 'select') {
+        authContent.innerHTML = `
+          <div class="w-full flex flex-col items-center animate-in zoom-in duration-300">
+            <div class="w-20 h-20 bg-slate-100 rounded-2xl flex items-center justify-center mb-6 shadow-inner"><i data-lucide="shield-check" class="w-10 h-10 text-slate-700"></i></div>
+            <h3 class="text-xl font-bold text-slate-800 mb-2">신고자 신분 확인</h3>
+            <p class="text-slate-500 text-center text-sm mb-10 leading-relaxed">정확한 행정 처리를 위해 신고자의<br/>신분을 확인합니다.</p>
+            <div class="w-full space-y-3">
+              <button onclick="authStep='phone'; renderAuthStep();" class="w-full bg-[#fae100] hover:bg-[#ebd300] text-[#3c1e1e] font-bold py-4 rounded-xl shadow-sm transition-colors flex items-center justify-center"><i data-lucide="message-square" class="w-[18px] h-[18px] mr-2"></i> 카카오톡으로 인증하기</button>
+              <button onclick="authStep='phone'; renderAuthStep();" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl shadow-sm transition-colors flex items-center justify-center"><i data-lucide="smartphone" class="w-[18px] h-[18px] mr-2"></i> PASS / 통신사 본인인증</button>
+            </div>
+          </div>
+        `;
+      } else if (authStep === 'phone') {
+        authContent.innerHTML = `
+          <div class="w-full h-full flex flex-col justify-center animate-in fade-in duration-300 transform translate-x-0">
+            <h3 class="text-2xl font-bold text-slate-800 mb-6">휴대폰 번호를<br/>입력해주세요</h3>
+            <div class="space-y-5">
+              <div><label class="block text-sm font-medium text-slate-600 mb-1">이름</label><input type="text" value="${userProfile.name}" readonly class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800" /></div>
+              <div><label class="block text-sm font-medium text-slate-600 mb-1">휴대폰 번호</label><input type="tel" value="${userProfile.phone}" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800" /></div>
+              <button onclick="authStep='code'; startTimer(); renderAuthStep();" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md mt-4 transition-colors">인증번호 요청</button>
+            </div>
+          </div>
+        `;
+      } else if (authStep === 'code') {
+        authContent.innerHTML = `
+          <div class="w-full h-full flex flex-col justify-center animate-in fade-in duration-300">
+            <h3 class="text-2xl font-bold text-slate-800 mb-2">인증번호 입력</h3>
+            <p class="text-slate-500 text-sm mb-8">휴대폰으로 전송된 6자리 번호를 입력하세요.<br/>(테스트용: 아무 번호나 6자리 입력)</p>
+            <div class="relative mb-6">
+              <i data-lucide="key-round" class="absolute left-4 top-4 text-slate-400 w-5 h-5"></i>
+              <!-- ✅ [점검 완료] 6자리 숫자만 입력 강제 및 버튼 제어 -->
+              <input type="text" id="auth-code-input" maxlength="6" placeholder="000000" class="w-full bg-slate-50 border border-slate-300 rounded-xl pl-12 pr-4 py-4 text-xl tracking-[0.3em] font-bold focus:outline-none focus:ring-2 focus:ring-blue-500" autofocus />
+              <span id="auth-timer-txt" class="absolute right-4 top-4 text-sm font-semibold text-red-500">03:00</span>
+            </div>
+            <button id="btn-auth-complete" disabled class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed">인증 완료하기</button>
+          </div>
+        `;
+        
+        const codeInput = document.getElementById('auth-code-input');
+        const completeBtn = document.getElementById('btn-auth-complete');
+        codeInput.addEventListener('input', (e) => {
+          e.target.value = e.target.value.replace(/[^0-9]/g, ''); // 숫자만
+          completeBtn.disabled = e.target.value.length !== 6 || timeLeft === 0;
+        });
+        completeBtn.addEventListener('click', completeAuth);
+      } else if (authStep === 'verifying') {
+        authContent.innerHTML = `
+          <div class="w-full flex flex-col items-center justify-center py-10 animate-in zoom-in duration-300">
+            <i data-lucide="loader-2" class="w-12 h-12 text-blue-600 animate-spin mb-4"></i>
+            <p class="text-slate-700 font-medium">본인 확인 중입니다...</p>
+          </div>
+        `;
+      }
+      lucide.createIcons();
+    }
+
+    function formatTime(s) {
+      const m = Math.floor(s / 60);
+      const sec = s % 60;
+      return `0${m}:${sec < 10 ? '0' : ''}${sec}`;
+    }
+
+    function startTimer() {
+      stopTimer();
+      timeLeft = 180;
+      timerInterval = setInterval(() => {
+        timeLeft--;
+        const txt = document.getElementById('auth-timer-txt');
+        const btn = document.getElementById('btn-auth-complete');
+        if(txt) {
+          txt.textContent = formatTime(timeLeft);
+          if (timeLeft <= 30) {
+            txt.classList.add('text-red-600', 'animate-pulse');
+            txt.classList.remove('text-red-500');
+          }
+        }
+        if (timeLeft <= 0) {
+          stopTimer();
+          if(btn) {
+            btn.disabled = true;
+            btn.textContent = '시간 초과 (재요청 바람)';
+          }
+        }
+      }, 1000);
+    }
+    function stopTimer() { if(timerInterval) clearInterval(timerInterval); }
+
+    function completeAuth() {
+      stopTimer();
+      authStep = 'verifying';
+      renderAuthStep();
+      setTimeout(() => {
+        const newId = `2026${Math.floor(Math.random() * 10000)}-R`;
+        const dateStr = new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        
+        reportHistory.unshift({
+          id: newId, date: dateStr, location: reportData.location, plateNumber: reportData.plateNumber, status: '접수대기'
+        });
+        
+        document.getElementById('success-id').textContent = newId;
+        document.getElementById('success-plate').textContent = reportData.plateNumber;
+        document.getElementById('success-loc').textContent = reportData.location;
+        
+        navigateTo('report', 'report_success');
+      }, 1500);
+    }
+
+
+    // ==========================================
+    // 마이페이지 로직
+    // ==========================================
+    function renderMyPage() {
+      document.getElementById('mypage-avatar').textContent = userProfile.name.charAt(0);
+      document.getElementById('mypage-name').textContent = userProfile.name + ' 님';
+      document.getElementById('mypage-car').textContent = userProfile.carNumber || '없음';
+      document.getElementById('mypage-phone').textContent = userProfile.phone;
+      document.getElementById('mypage-history-count').textContent = reportHistory.length;
+    }
+
+    function setupEditProfile() {
+      document.getElementById('edit-avatar').textContent = userProfile.name.charAt(0);
+      document.getElementById('edit-name').value = userProfile.name;
+      document.getElementById('edit-phone').value = userProfile.phone;
+      document.getElementById('edit-car').value = userProfile.carNumber;
+    }
+
+    function saveProfile() {
+      userProfile.name = document.getElementById('edit-name').value;
+      userProfile.phone = document.getElementById('edit-phone').value;
+      userProfile.carNumber = document.getElementById('edit-car').value;
+      showToast('프로필이 성공적으로 변경되었습니다.');
+      navigateTo('mypage', 'main');
+    }
+
+    function renderReportHistory() {
+      const list = document.getElementById('history-list');
+      list.innerHTML = '';
+      if(reportHistory.length === 0) {
+        list.innerHTML = `<div class="flex flex-col items-center justify-center py-20 text-slate-400"><i data-lucide="history" class="w-12 h-12 mb-4 opacity-20"></i><p>신고 내역이 없습니다.</p></div>`;
+      } else {
+        reportHistory.forEach(r => {
+          let colorClass = r.status === '처리완료' ? 'bg-green-400' : (r.status === '접수대기' ? 'bg-indigo-400' : 'bg-amber-400');
+          let textClass = r.status === '처리완료' ? 'bg-green-100 text-green-700' : (r.status === '접수대기' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700');
+          
+          list.innerHTML += `
+            <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col relative overflow-hidden">
+              <div class="absolute left-0 top-0 bottom-0 w-1.5 ${colorClass}"></div>
+              <div class="flex justify-between items-start mb-3 pl-2">
+                <span class="text-xs font-semibold text-slate-400">${r.date}</span>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-full ${textClass}">${r.status}</span>
+              </div>
+              <div class="pl-2">
+                <h4 class="font-bold text-slate-800 mb-1 truncate text-lg">${r.location}</h4>
+                <p class="text-sm text-slate-500 mb-3 flex items-center"><i data-lucide="car" class="w-[14px] h-[14px] mr-1"></i> ${r.plateNumber}</p>
+                <div class="text-[11px] text-slate-400 font-mono bg-slate-50 px-2 py-1 rounded inline-block">ID: ${r.id}</div>
+              </div>
+            </div>
+          `;
+        });
+      }
+      lucide.createIcons();
+    }
+
+    // 초기화 렌더링
+    renderHome();
+
+  </script>
+</body>
+</html>
